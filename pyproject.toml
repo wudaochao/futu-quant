@@ -1,0 +1,20 @@
+[project]
+name = "futu-quant"
+version = "0.1.0"
+description = "BBI + BOLL multi-timeframe quantitative trading lab for Futu OpenAPI"
+requires-python = ">=3.9"
+dependencies = [
+  "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+futu = [
+  "futu-api",
+]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
