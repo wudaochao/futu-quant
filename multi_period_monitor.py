@@ -20,17 +20,20 @@ class MultiPeriodIndicatorMonitor:
         periods,
         target_kline_count=30,
         feishu_webhook_url=DEFAULT_FEISHU_WEBHOOK_URL,
+        suppress_feishu_in_same_period=True,
     ):
         self.quote_ctx = quote_ctx
         self.code_list = code_list
         self.periods = periods
         self.target_kline_count = target_kline_count
         self.feishu_webhook_url = feishu_webhook_url
+        self.suppress_feishu_in_same_period = suppress_feishu_in_same_period
 
         self.indicator_map = self._init_indicator_map()
         self.last_price_map = {code: 0.0 for code in code_list}
         self.calc_boll_map = {}
         self.calc_bbi_map = {}
+        self.sent_feishu_period_keys = set()
 
     def _init_indicator_map(self):
         return {
@@ -194,29 +197,68 @@ class MultiPeriodIndicatorMonitor:
             return
 
         period_name = self.period_name(period)
-        self.check_cross(code, period_name, "BBI", bbi, last_price, current_price)
-        self.check_cross(code, period_name, "BOLL中轨", mid, last_price, current_price)
-        self.check_cross(code, period_name, "BOLL上轨", upper, last_price, current_price)
-        self.check_cross(code, period_name, "BOLL下轨", lower, last_price, current_price)
+        print(f"{code} {period_name}: bbi={bbi} mid={mid}, upper={upper}, lower={lower} last={last_price}, current={current_price}")
 
-    def check_cross(self, code, period_name, indicator_name, line_value, last_price, current_price):
+        #self.check_cross(code, period, period_name, "BBI", bbi, last_price, current_price)
+        #self.check_cross(code, period, period_name, "BOLL中轨", mid, last_price, current_price)
+        #self.check_cross(code, period, period_name, "BOLL上轨", upper, last_price, current_price)
+        #self.check_cross(code, period, period_name, "BOLL下轨", lower, last_price, current_price)
+        if bbi > mid:
+            if last_price > bbi >= current_price:
+                action = f"{code}跌到{period_name}BBI"
+                message = f"{action}: bbi={bbi}, last={last_price}, current={current_price}"
+                print(message)
+                self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
+        elif bbi < mid:
+            if last_price < bbi <= current_price:
+                action = f"{code}涨到{period_name}BBI"
+                message = f"{action}: bbi={bbi}, last={last_price}, current={current_price}"
+                print(message)
+                self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
+
+        if mid < last_price < upper:
+            if current_price >= upper:
+                action = f"{code}涨到{period_name}BOLL上轨"
+                message = f"{action}: upper={upper}, last={last_price}, current={current_price}"
+                print(message)
+                self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
+            elif current_price < mid:
+                action = f"{code}跌到{period_name}BOLL中轨"
+                message = f"{action}: mid={mid}, last={last_price}, current={current_price}"
+                print(message)
+                self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
+        elif mid > last_price > lower:
+            if current_price >= mid:
+                action = f"{code}涨到{period_name}BOLL中轨"
+                message = f"{action}: mid={mid}, last={last_price}, current={current_price}"
+                print(message)
+                self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
+            elif current_price <= lower:
+                action = f"{code}跌到{period_name}BOLL下轨"
+                message = f"{action}: lower={lower}, last={last_price}, current={current_price}"
+                print(message)
+                self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
+
+    def check_cross(self, code, period, period_name, indicator_name, line_value, last_price, current_price):
         if last_price < line_value <= current_price:
             message = (
                 f"{code} 上穿{period_name}{indicator_name}: "
                 f"line={line_value}, last={last_price}, current={current_price}"
             )
             print(message)
-            self.send_feishu_message(message)
+            self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, "up"))
         elif last_price > line_value >= current_price:
             message = (
                 f"{code} 下穿{period_name}{indicator_name}: "
                 f"line={line_value}, last={last_price}, current={current_price}"
             )
             print(message)
-            self.send_feishu_message(message)
+            self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, "down"))
 
-    def send_feishu_message(self, text):
+    def send_feishu_message(self, text, suppress_key=None):
         if not self.feishu_webhook_url:
+            return
+        if self.should_suppress_feishu(suppress_key):
             return
 
         payload = {
@@ -243,6 +285,18 @@ class MultiPeriodIndicatorMonitor:
             print(f"feishu webhook url error: msg={exc.reason}")
         except TimeoutError:
             print("feishu webhook timeout")
+
+    def should_suppress_feishu(self, suppress_key):
+        if not self.suppress_feishu_in_same_period or suppress_key is None:
+            return False
+        if suppress_key in self.sent_feishu_period_keys:
+            return True
+        self.sent_feishu_period_keys.add(suppress_key)
+        return False
+
+    def get_feishu_suppress_key(self, code, action_type):
+        now = datetime.now()
+        return code, action_type, now.year, now.month, now.day, now.hour, now.minute // 15
 
     def period_name(self, period):
         period_names = {

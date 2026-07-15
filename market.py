@@ -16,6 +16,31 @@ periods = [
     KLType.K_QUARTER,
 ]
 
+trade_time_15m = {
+    "09:30",
+    "09:45",
+    "10:00",
+    "10:15",
+    "10:30",
+    "10:45",
+    "11:00",
+    "11:15",
+    "11:30",
+    "13:00",
+    "13:15",
+    "13:30",
+    "13:45",
+    "14:15",
+    "14:30",
+    "14:45",
+    "15:00",
+}
+
+trade_time_2h = {
+    "11:25",
+    "14:55"
+}
+
 class RTDataHandler(RTDataHandlerBase):
     def __init__(self, monitor):
         super().__init__()
@@ -57,14 +82,18 @@ def indicator_loop_thread(monitor):
     monitor.request_all_indicators()
 
     while True:
-        current_minute = time.localtime().tm_min
-        if current_minute in TRIGGER_MINUTES and current_minute != last_trigger_minute:
+        current_minute = datetime.now().strftime("%H:%M")
+        if current_minute in trade_time_15m and current_minute != last_trigger_minute:
             print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             last_trigger_minute = current_minute
             monitor.request_all_indicators()
 
-        time.sleep(0.2)
+        time.sleep(5)
 
+        # if current_minute in TRIGGER_MINUTES and current_minute != last_trigger_minute:
+        #     print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        #     last_trigger_minute = current_minute
+        #     monitor.request_all_indicators()
 
 def start_indicator_thread(monitor):
     thread = threading.Thread(target=indicator_loop_thread, args=(monitor,))

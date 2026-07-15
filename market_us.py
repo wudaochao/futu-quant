@@ -2,11 +2,39 @@ from futu import *
 import threading
 import time
 from datetime import datetime
+import pytz
 
 from multi_period_monitor import MultiPeriodIndicatorMonitor
 
+trade_time_15m = {
+    "09:30",
+    "09:45",
+    "10:00",
+    "10:15",
+    "10:30",
+    "10:45",
+    "11:00",
+    "11:15",
+    "11:30",
+    "11:45",
+    "12:00",
+    "12:15",
+    "12:30",
+    "12:45",
+    "13:00",
+    "13:15",
+    "13:30",
+    "13:45",
+    "14:15",
+    "14:30",
+    "14:45",
+    "15:00",
+    "15:15",
+    "15:30",
+    "15:45",
+    "16:00",
+}
 
-TRIGGER_MINUTES = {0, 15, 30, 45}
 
 code_list = ["US.QQQ", "US.TSLA"]
 periods = [
@@ -16,6 +44,8 @@ periods = [
     KLType.K_QUARTER,
 ]
 
+def get_us_eastern_now():
+    return datetime.now(pytz.timezone("America/New_York"))
 
 class RTDataHandler(RTDataHandlerBase):
     def __init__(self, monitor):
@@ -30,7 +60,7 @@ class RTDataHandler(RTDataHandlerBase):
 
         code = data["code"][0]
         current_price = data["cur_price"][0]
-        #print(data["time"][0], code, current_price)
+        # print(data["time"][0], code, current_price)
         self.monitor.on_realtime_price(code, current_price)
 
         return RET_OK, data
@@ -58,9 +88,9 @@ def indicator_loop_thread(monitor):
     monitor.request_all_indicators()
 
     while True:
-        current_minute = time.localtime().tm_min
-        if current_minute in TRIGGER_MINUTES and current_minute != last_trigger_minute:
-            print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        current_minute = get_us_eastern_now().strftime("%H:%M")
+        if current_minute in trade_time_15m and current_minute != last_trigger_minute:
+            print(get_us_eastern_now().strftime("%Y-%m-%d %H:%M:%S"))
             last_trigger_minute = current_minute
             monitor.request_all_indicators()
 
