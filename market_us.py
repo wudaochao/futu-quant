@@ -94,8 +94,6 @@ def indicator_loop_thread(monitor):
             last_trigger_minute = current_minute
             monitor.request_all_indicators()
 
-        monitor.request_all_indicators()
-
         time.sleep(60)
 
 

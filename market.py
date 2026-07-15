@@ -37,6 +37,7 @@ trade_time_15m = {
 }
 
 trade_time_2h = {
+    "09:25",
     "11:25",
     "14:55"
 }
@@ -95,13 +96,12 @@ def indicator_loop_thread(monitor):
         #     last_trigger_minute = current_minute
         #     monitor.request_all_indicators()
 
-def start_indicator_thread(monitor):
-    thread = threading.Thread(target=indicator_loop_thread, args=(monitor,))
-    thread.start()
-    return thread
+# def start_indicator_thread(monitor):
+#     thread = threading.Thread(target=indicator_loop_thread, args=(monitor,))
+#     thread.start()
+#     return thread
 
-
-if __name__ == "__main__":
+def start_indicator_thread():
     quote_ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
     monitor = MultiPeriodIndicatorMonitor(
         quote_ctx=quote_ctx,
@@ -118,5 +118,13 @@ if __name__ == "__main__":
     else:
         print("subscribe error:", data)
 
-    thread = start_indicator_thread(monitor)
+    thread = threading.Thread(target=indicator_loop_thread, args=(monitor,))
+    thread.start()
+    return thread
+    # thread = start_indicator_thread(monitor)
+    # thread.join()
+
+
+if __name__ == "__main__":
+    thread = start_indicator_thread()
     thread.join()

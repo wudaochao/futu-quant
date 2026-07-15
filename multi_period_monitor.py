@@ -132,12 +132,12 @@ class MultiPeriodIndicatorMonitor:
     def has_enough_kline(self, kl_data, code, period):
         count = len(kl_data)
         minimum_count = 25
-        if count < self.target_kline_count:
-            print(
-                f"kline count less than target: code={code}, "
-                f"period={self.period_name(period)}, count={count}, "
-                f"target={self.target_kline_count}"
-            )
+        # if count < self.target_kline_count:
+        #     print(
+        #         f"kline count less than target: code={code}, "
+        #         f"period={self.period_name(period)}, count={count}, "
+        #         f"target={self.target_kline_count}"
+        #     )
         if count < minimum_count:
             print(
                 f"skip indicator calc, kline count too small: code={code}, "
@@ -173,16 +173,18 @@ class MultiPeriodIndicatorMonitor:
                 "LOWER": newest["values"][2],
             }
 
-            self.print_indicator_update(code, period)
-            return
+            #self.print_indicator_update(code, period)
+            #return
 
         if calc_id in self.calc_bbi_map:
             code, period = self.calc_bbi_map.pop(calc_id)
             bbi = 2 * newest["values"][0] - latest["values"][0]
             self.indicator_map[period][code]["BBI"] = bbi
             self.last_indicator_map[period][code]["BBI"] = newest["values"][0]
-            self.print_indicator_update(code, period)
-            return
+
+
+        #self.print_indicator_update(code, period)
+        return
 
     def print_indicator_update(self, code, period):
         indicators = self.indicator_map[period][code]
@@ -238,13 +240,13 @@ class MultiPeriodIndicatorMonitor:
         #self.check_cross(code, period, period_name, "BOLL中轨", mid, last_price, current_price)
         #self.check_cross(code, period, period_name, "BOLL上轨", upper, last_price, current_price)
         #self.check_cross(code, period, period_name, "BOLL下轨", lower, last_price, current_price)
-        if last_close > last_bbi:
+        if last_close > last_bbi > last_mid:
             if current_price <= bbi < last_price:
                 action = f"{code}跌到{period_name}BBI"
                 message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: bbi={bbi}, last_price={last_price} current={current_price}"
                 #print(message)
                 self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
-        elif last_close < last_bbi:
+        elif last_close < last_bbi < last_mid:
             if current_price >= bbi > last_price:
                 action = f"{code}涨到{period_name}BBI"
                 message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: bbi={bbi}, last_price={last_price} current={current_price}"
