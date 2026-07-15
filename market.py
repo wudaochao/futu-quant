@@ -37,7 +37,7 @@ trade_time_15m = {
 }
 
 trade_time_2h = {
-    "09:25",
+    "09:26",
     "11:25",
     "14:55"
 }
@@ -75,6 +75,13 @@ class IndicatorCalcHandler(IndicatorCalcHandlerBase):
         self.monitor.on_indicator_result(content)
         return RET_OK, content
 
+def analyze_policy(time_str, monitor):
+    if time_str == "09:26":
+        
+    elif time_str == "11:25":
+
+    elif time_str == "14:55":
+
 
 def indicator_loop_thread(monitor):
     last_trigger_minute = None
@@ -88,6 +95,10 @@ def indicator_loop_thread(monitor):
             print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             last_trigger_minute = current_minute
             monitor.request_all_indicators()
+
+        if current_minute in trade_time_2h:
+            analyze_policy(monitor)
+
 
         time.sleep(5)
 
