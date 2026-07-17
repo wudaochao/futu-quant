@@ -1,6 +1,5 @@
-from futu import *
-from datetime import datetime
-import indicator
+import threading
+import time
 import market
 import market_us
 

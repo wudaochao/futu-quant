@@ -5,6 +5,8 @@ from datetime import datetime
 import pytz
 
 from multi_period_monitor import MultiPeriodIndicatorMonitor
+from dynamic_market import start_dynamic_market
+from watchlist_config import is_hk_or_us
 
 trade_time_15m = {
     "09:30",
@@ -104,23 +106,7 @@ def start_indicator_thread(monitor):
 
 
 def us_start_indicator_thread():
-    quote_ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
-    monitor = MultiPeriodIndicatorMonitor(
-        quote_ctx=quote_ctx,
-        code_list=code_list,
-        periods=periods,
-    )
-
-    quote_ctx.set_handler(IndicatorCalcHandler(monitor))
-    quote_ctx.set_handler(RTDataHandler(monitor))
-
-    ret, data = quote_ctx.subscribe(code_list, [SubType.RT_DATA], session=Session.ALL)
-    if ret == RET_OK:
-        print(data)
-    else:
-        print("subscribe error:", data)
-
-    return start_indicator_thread(monitor)
+    return start_dynamic_market(is_hk_or_us, "HK-US")
 
 
 if __name__ == "__main__":

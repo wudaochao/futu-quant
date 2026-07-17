@@ -4,6 +4,8 @@ import time
 from datetime import datetime
 
 from multi_period_monitor import MultiPeriodIndicatorMonitor
+from dynamic_market import start_dynamic_market
+from watchlist_config import is_a_share
 
 TRIGGER_MINUTES = {0, 15, 30, 45}
 
@@ -77,11 +79,11 @@ class IndicatorCalcHandler(IndicatorCalcHandlerBase):
 
 def analyze_policy(time_str, monitor):
     if time_str == "09:26":
-        
+        print("9:26")
     elif time_str == "11:25":
-
+        print("11:25")
     elif time_str == "14:55":
-
+        print("14:55")
 
 def indicator_loop_thread(monitor):
     last_trigger_minute = None
@@ -96,8 +98,8 @@ def indicator_loop_thread(monitor):
             last_trigger_minute = current_minute
             monitor.request_all_indicators()
 
-        if current_minute in trade_time_2h:
-            analyze_policy(monitor)
+        #if current_minute in trade_time_2h:
+        #    analyze_policy(current_minute, monitor)
 
 
         time.sleep(5)
@@ -113,25 +115,7 @@ def indicator_loop_thread(monitor):
 #     return thread
 
 def start_indicator_thread():
-    quote_ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
-    monitor = MultiPeriodIndicatorMonitor(
-        quote_ctx=quote_ctx,
-        code_list=code_list,
-        periods=periods,
-    )
-
-    quote_ctx.set_handler(IndicatorCalcHandler(monitor))
-    quote_ctx.set_handler(RTDataHandler(monitor))
-
-    ret, data = quote_ctx.subscribe(code_list, [SubType.RT_DATA], session=Session.ALL)
-    if ret == RET_OK:
-        print(data)
-    else:
-        print("subscribe error:", data)
-
-    thread = threading.Thread(target=indicator_loop_thread, args=(monitor,))
-    thread.start()
-    return thread
+    return start_dynamic_market(is_a_share, "A-share")
     # thread = start_indicator_thread(monitor)
     # thread.join()
 

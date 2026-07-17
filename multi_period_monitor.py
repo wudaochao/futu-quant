@@ -1,4 +1,5 @@
 import json
+import threading
 from datetime import datetime, timedelta
 from urllib import request
 from urllib.error import HTTPError, URLError
@@ -18,13 +19,19 @@ class MultiPeriodIndicatorMonitor:
         quote_ctx,
         code_list,
         periods,
+        indicator_tasks=None,
         target_kline_count=30,
         feishu_webhook_url=DEFAULT_FEISHU_WEBHOOK_URL,
         suppress_feishu_in_same_period=True,
     ):
         self.quote_ctx = quote_ctx
-        self.code_list = code_list
-        self.periods = periods
+        self.code_list = list(code_list)
+        self.periods = list(periods)
+        self.indicator_tasks = indicator_tasks if indicator_tasks is not None else {
+            code: {(period, "BBI") for period in periods}
+            | {(period, "BOLL") for period in periods}
+            for code in code_list
+        }
         self.target_kline_count = target_kline_count
         self.feishu_webhook_url = feishu_webhook_url
         self.suppress_feishu_in_same_period = suppress_feishu_in_same_period
@@ -36,6 +43,7 @@ class MultiPeriodIndicatorMonitor:
         self.calc_boll_map = {}
         self.calc_bbi_map = {}
         self.sent_feishu_period_keys = set()
+        self.lock = threading.RLock()
 
     def _init_indicator_map(self):
         return {
@@ -52,20 +60,21 @@ class MultiPeriodIndicatorMonitor:
     def _init_close_price_map(self):
         return {
             period: {
-                code: {
-                    "CLOSE": 0.0,
-                }
+                code: 0.0
                 for code in self.code_list
             }
             for period in self.periods
         }
 
     def request_all_indicators(self):
-        for period in self.periods:
-            for code in self.code_list:
-                self.request_indicator(code, period)
+        with self.lock:
+            tasks = {code: set(values) for code, values in self.indicator_tasks.items()}
+        for code, code_tasks in tasks.items():
+            for period in {period for period, _ in code_tasks}:
+                self.request_indicator(code, period, code_tasks)
 
-    def request_indicator(self, code, period):
+    def request_indicator(self, code, period, code_tasks=None):
+        code_tasks = code_tasks or self.indicator_tasks.get(code, set())
         start, end = self.get_kline_date_range(period)
         ret, kl_data, _ = self.quote_ctx.request_history_kline(
             code,
@@ -79,46 +88,33 @@ class MultiPeriodIndicatorMonitor:
                 f"period={self.period_name(period)}, msg={kl_data}"
             )
             return
-        else:
-            self.close_price_map[period][code] = kl_data["close"].tolist()[-1]
-
         if not self.has_enough_kline(kl_data, code, period):
             return
+        self.close_price_map[period][code] = kl_data["close"].iloc[-1]
 
-        ret, calc_id = self.quote_ctx.request_indicator_calc_async(
-            "BOLL",
-            IndicatorLangType.MYLANG,
-            code,
-            period,
-            kl_data,
-        )
-        if ret == RET_OK:
-            self.calc_boll_map[calc_id] = (code, period)
-        else:
-            print(
-                f"BOLL calc error: code={code}, "
-                f"period={self.period_name(period)}, msg={calc_id}"
+        for indicator_name, calc_map in (
+            ("BOLL", self.calc_boll_map),
+            ("BBI", self.calc_bbi_map),
+        ):
+            if (period, indicator_name) not in code_tasks:
+                continue
+            ret, calc_id = self.quote_ctx.request_indicator_calc_async(
+                indicator_name, IndicatorLangType.MYLANG, code, period, kl_data
             )
-
-        ret, calc_id = self.quote_ctx.request_indicator_calc_async(
-            "BBI",
-            IndicatorLangType.MYLANG,
-            code,
-            period,
-            kl_data,
-        )
-        if ret == RET_OK:
-            self.calc_bbi_map[calc_id] = (code, period)
-        else:
-            print(
-                f"BBI calc error: code={code}, "
-                f"period={self.period_name(period)}, msg={calc_id}"
-            )
+            if ret == RET_OK:
+                with self.lock:
+                    calc_map[calc_id] = (code, period)
+            else:
+                print(
+                    f"{indicator_name} calc error: code={code}, "
+                    f"period={self.period_name(period)}, msg={calc_id}"
+                )
 
     def get_kline_date_range(self, period):
         end_date = datetime.now().date()
         lookback_days_map = {
             KLType.K_15M: 10,
+            KLType.K_60M: 30,
             KLType.K_120M: 45,
             KLType.K_240M: 90,
             KLType.K_WEEK: 260,
@@ -131,7 +127,7 @@ class MultiPeriodIndicatorMonitor:
 
     def has_enough_kline(self, kl_data, code, period):
         count = len(kl_data)
-        minimum_count = 25
+        minimum_count = self.target_kline_count
         # if count < self.target_kline_count:
         #     print(
         #         f"kline count less than target: code={code}, "
@@ -202,7 +198,8 @@ class MultiPeriodIndicatorMonitor:
             self.last_price_map[code] = current_price
             return
 
-        for period in self.periods:
+        periods = {period for period, _ in self.indicator_tasks.get(code, set())}
+        for period in periods:
             self.check_period_alert(code, period, last_price, current_price)
 
         self.last_price_map[code] = current_price
@@ -215,7 +212,17 @@ class MultiPeriodIndicatorMonitor:
         last_bbi = last_indicators["BBI"]
         boll = indicators["BOLL"]
         last_boll = last_indicators["BOLL"]
-        if bbi is None or not boll or not last_boll:
+        tasks = self.indicator_tasks.get(code, set())
+        has_bbi = (period, "BBI") in tasks and bbi is not None and last_bbi is not None
+        has_boll = (period, "BOLL") in tasks and bool(boll) and bool(last_boll)
+        if not has_bbi and not has_boll:
+            return
+
+        period_name = self.period_name(period)
+        if has_bbi and not has_boll:
+            self.check_cross(code, period, period_name, "BBI", bbi, last_price, current_price)
+            return
+        if not has_boll:
             return
 
         mid = boll.get("MID")
@@ -243,36 +250,36 @@ class MultiPeriodIndicatorMonitor:
         if last_close > last_bbi > last_mid:
             if current_price <= bbi < last_price:
                 action = f"{code}跌到{period_name}BBI"
-                message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: bbi={bbi}, last_price={last_price} current={current_price}"
+                message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: bbi={bbi:.2f}, last_price={last_price:.2f} current={current_price:.2f}"
                 #print(message)
                 self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
         elif last_close < last_bbi < last_mid:
             if current_price >= bbi > last_price:
                 action = f"{code}涨到{period_name}BBI"
-                message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: bbi={bbi}, last_price={last_price} current={current_price}"
+                message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: bbi={bbi:.2f}, last_price={last_price:.2f} current={current_price:.2f}"
                 #print(message)
                 self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
 
         if last_mid < last_close < last_upper:
             if current_price >= upper > last_price:
                 action = f"{code}涨到{period_name}BOLL上轨"
-                message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: upper={upper}, last_price={last_price} current={current_price}"
+                message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: upper={upper:.2f}, last_price={last_price:.2f} current={current_price:.2f}"
                 #print(message)
                 self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
             elif current_price < mid < last_price:
                 action = f"{code}跌到{period_name}BOLL中轨"
-                message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: mid={mid}, last_price={last_price} current={current_price}"
+                message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: mid={mid:.2f}, last_price={last_price:.2f} current={current_price:.2f}"
                 #print(message)
                 self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
         elif last_mid > last_close > last_lower:
             if current_price >= mid > last_price:
                 action = f"{code}涨到{period_name}BOLL中轨"
-                message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: mid={mid}, last_price={last_price} current={current_price}"
+                message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: mid={mid:.2f}, last_price={last_price:.2f} current={current_price:.2f}"
                 #print(message)
                 self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
             elif current_price <= lower < last_price:
                 action = f"{code}跌到{period_name}BOLL下轨"
-                message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: lower={lower}, last_price={last_price} current={current_price}"
+                message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {action}: lower={lower:.2f}, last_price={last_price:.2f} current={current_price:.2f}"
                 #print(message)
                 self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
 
@@ -283,14 +290,16 @@ class MultiPeriodIndicatorMonitor:
                 f"line={line_value}, last={last_price}, current={current_price}"
             )
             print(message)
-            self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, "up"))
+            action = f"{period_name}{indicator_name}上穿"
+            self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
         elif last_price > line_value >= current_price:
             message = (
                 f"{code} 下穿{period_name}{indicator_name}: "
                 f"line={line_value}, last={last_price}, current={current_price}"
             )
             print(message)
-            self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, "down"))
+            action = f"{period_name}{indicator_name}下穿"
+            self.send_feishu_message(message, suppress_key=self.get_feishu_suppress_key(code, action))
 
     def send_feishu_message(self, text, suppress_key=None):
         if not self.feishu_webhook_url:
@@ -340,6 +349,7 @@ class MultiPeriodIndicatorMonitor:
     def period_name(self, period):
         period_names = {
             KLType.K_15M: "15分钟",
+            KLType.K_60M: "1小时",
             KLType.K_120M: "2小时",
             KLType.K_240M: "4小时",
             KLType.K_WEEK: "周线",
@@ -347,3 +357,37 @@ class MultiPeriodIndicatorMonitor:
             KLType.K_QUARTER: "季线",
         }
         return period_names.get(period, str(period))
+
+    def update_indicator_tasks(self, indicator_tasks):
+        """Replace the dynamic universe while preserving unchanged indicator state."""
+        with self.lock:
+            old_codes = set(self.code_list)
+            new_codes = set(indicator_tasks)
+            changed_codes = {
+                code
+                for code in old_codes & new_codes
+                if self.indicator_tasks.get(code, set()) != set(indicator_tasks[code])
+            }
+            all_periods = {
+                period
+                for tasks in indicator_tasks.values()
+                for period, _ in tasks
+            }
+            for period in all_periods:
+                self.indicator_map.setdefault(period, {})
+                self.last_indicator_map.setdefault(period, {})
+                self.close_price_map.setdefault(period, {})
+                for code in new_codes:
+                    self.indicator_map[period].setdefault(code, {"BBI": None, "BOLL": {}})
+                    self.last_indicator_map[period].setdefault(code, {"BBI": None, "BOLL": {}})
+                    self.close_price_map[period].setdefault(code, 0.0)
+            for code in new_codes:
+                self.last_price_map.setdefault(code, 0.0)
+            for code in old_codes - new_codes:
+                self.last_price_map.pop(code, None)
+            self.code_list = sorted(new_codes)
+            self.periods = list(all_periods)
+            self.indicator_tasks = {
+                code: set(tasks) for code, tasks in indicator_tasks.items()
+            }
+        return new_codes - old_codes, old_codes - new_codes, changed_codes
